@@ -11,6 +11,14 @@ EOF
 	uci set turboacc.config.sw_flow='0' && \
 	uci set turboacc.config.hw_flow='0'
 
+# MediaTek HNAT available (21.02 based MTK targets): default to mtkhnat offloading
+kernel_ver="$(uname -r)"
+[ -e "/lib/modules/$kernel_ver/mtkhnat.ko" ] && \
+	uci set turboacc.config.hnat_flow='1' && \
+	uci set turboacc.config.sw_flow='0' && \
+	uci set turboacc.config.hw_flow='0' && \
+	uci set turboacc.config.sfe_flow='0'
+
 uci commit turboacc
 
 exit 0

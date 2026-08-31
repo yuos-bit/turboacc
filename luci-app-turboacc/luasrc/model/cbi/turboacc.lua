@@ -10,15 +10,20 @@ s = m:section(TypedSection, "turboacc", "")
 s.addremove = false
 s.anonymous = true
 
--- nftables: nft_flow_offload is built-in mod
-if nixio.fs.access("/lib/modules/" .. kernel_version .. "/nft_flow_offload.ko") then
+-- nftables: nft_flow_offload is built-in mod (firewall4);
+-- firewall3 (21.02) uses the iptables FLOWOFFLOAD target instead
+if nixio.fs.access("/lib/modules/" .. kernel_version .. "/nft_flow_offload.ko")
+or nixio.fs.access("/lib/modules/" .. kernel_version .. "/xt_FLOWOFFLOAD.ko") then
 sw_flow = s:option(Flag, "sw_flow", translate("Software flow offloading"))
 sw_flow.default = 0
 sw_flow.description = translate("Software based offloading for routing/NAT")
 sw_flow:depends("sfe_flow", 0)
 end
 
-if luci.sys.call("cat /etc/openwrt_release | grep -Eq 'filogic|mt762' ") == 0 then
+-- Hardware flow offloading needs firewall4 (flowtable hw offload) plus a NIC
+-- driver that implements it (mediatek/filogic mt7622/mt798x). MT7621/MT7620
+-- have no hw offload driver on 21.02/fw3, so hide the option there.
+if luci.sys.call("command -v fw4 >\"/dev/null\" 2>&1 && cat /etc/openwrt_release | grep -Eq 'mediatek|filogic' ") == 0 then
 hw_flow = s:option(Flag, "hw_flow", translate("Hardware flow offloading"))
 hw_flow.default = 0
 hw_flow.description = translate("Requires hardware NAT support, implemented at least for mt762x")
@@ -32,6 +37,14 @@ hw_wed.default = 0
 hw_wed.description = translate("Requires hardware support, implemented at least for Filogic 8x0")
 hw_wed:depends("hw_flow", 1)
 end
+-- MediaTek HNAT (mtkhnat), used on 21.02 based MTK targets (immortalwrt-mt798x)
+if nixio.fs.access("/lib/modules/" .. kernel_version .. "/mtkhnat.ko") then
+hnat_flow = s:option(Flag, "hnat_flow", translate("MediaTek HWNAT offloading"))
+hnat_flow.default = 0
+hnat_flow.description = translate("MediaTek HNAT hardware offloading (mtkhnat)")
+hnat_flow:depends("sw_flow", 0)
+hnat_flow:depends("sfe_flow", 0)
+end
 end
 
 if nixio.fs.access("/lib/modules/" .. kernel_version .. "/shortcut-fe-cm.ko")
@@ -41,10 +54,13 @@ sfe_flow = s:option(Flag, "sfe_flow", translate("Shortcut-FE flow offloading"))
 sfe_flow.default = 0
 sfe_flow.description = translate("Shortcut-FE based offloading for routing/NAT")
 sfe_flow:depends("sw_flow", 0)
+sfe_flow:depends("hnat_flow", 0)
 end
 
--- nftables
-if nixio.fs.access("/lib/modules/" .. kernel_version .. "/nft_fullcone.ko") then
+-- nftables (firewall4) or iptables FULLCONENAT (firewall3, 21.02)
+if nixio.fs.access("/lib/modules/" .. kernel_version .. "/nft_fullcone.ko")
+or luci.sys.call("iptables -m FULLCONENAT -h >\"/dev/null\" 2>&1") == 0
+then
 fullcone_nat = s:option(Flag, "fullcone_nat", translate("FullCone NAT"))
 fullcone_nat.default = 0
 fullcone_nat.description = translate("Using FullCone NAT can improve gaming performance effectively")

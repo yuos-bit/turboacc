@@ -54,3 +54,9 @@ msgstr "流量分载"
 
 msgid "MTK WED WO offloading"
 msgstr "MTK 无线硬件加速"
+
+msgid "MediaTek HWNAT offloading"
+msgstr "MediaTek 硬件 NAT 加速"
+
+msgid "MediaTek HNAT hardware offloading (mtkhnat)"
+msgstr "MediaTek HNAT 硬件流量分载 (mtkhnat)"

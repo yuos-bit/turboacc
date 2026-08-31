@@ -11,17 +11,38 @@ EXTRA_HELP="	check_status Check running status of utils"
 
 restart_utils="true"
 
+# Firewall flavor: fw4 (OpenWrt 22.03/23.05, nftables) or fw3 (OpenWrt 21.02,
+# iptables). Detect once via the fw4 binary.
+FW_FLAVOR="fw4"
+
+detect_fw() {
+	if command -v fw4 >"/dev/null" 2>&1; then
+		FW_FLAVOR="fw4"
+	else
+		FW_FLAVOR="fw3"
+	fi
+}
+
 inital_conf(){
 	config_load "turboacc"
 	config_get "hw_wed" "config" "hw_wed" "0"
 	config_get "hw_flow" "config" "hw_flow" "0"
 	config_get "sw_flow" "config" "sw_flow" "0"
 	config_get "sfe_flow" "config" "sfe_flow" "0"
+	config_get "hnat_flow" "config" "hnat_flow" "0"
 	config_get "bbr_cca" "config" "bbr_cca" "0"
 	config_get "fullcone_nat" "config" "fullcone_nat" "0"
 	config_get "fullcone6" "config" "fullcone6" "0"
 
-	[ ! -e "/lib/modules/$(uname -r)/nft_flow_offload.ko" ] && { sw_flow="0"; hw_flow="0"; }
+	detect_fw
+	# firewall4 offloads via nft_flow_offload, firewall3 via the iptables
+	# FLOWOFFLOAD target (xt_FLOWOFFLOAD).
+	if [ "$FW_FLAVOR" = "fw4" ]; then
+		[ ! -e "/lib/modules/$(uname -r)/nft_flow_offload.ko" ] && { sw_flow="0"; hw_flow="0"; }
+	else
+		[ ! -e "/lib/modules/$(uname -r)/xt_FLOWOFFLOAD.ko" ] && { sw_flow="0"; hw_flow="0"; }
+	fi
+	[ ! -e "/lib/modules/$(uname -r)/mtkhnat.ko" ] && hnat_flow="0"
 	[ ! -e "/lib/modules/$(uname -r)/tcp_bbr.ko" ] && bbr_cca="0"
 }
 
@@ -59,6 +80,22 @@ unload_wed() {
 		}
 }
 
+# MediaTek HNAT (mtkhnat / hw_nat), as used by immortalwrt-mt798x on
+# OpenWrt 21.02. Controlled through the debugfs hook_toggle.
+load_hnat() {
+	[ -e "/lib/modules/$(uname -r)/mtkhnat.ko" ] && {
+		lsmod | grep -q "mtkhnat" || modprobe mtkhnat 2>"/dev/null"
+		[ -e "/sys/kernel/debug/hnat/hook_toggle" ] && echo "1" > "/sys/kernel/debug/hnat/hook_toggle"
+	}
+}
+
+unload_hnat() {
+	[ -e "/lib/modules/$(uname -r)/mtkhnat.ko" ] && {
+		[ -e "/sys/kernel/debug/hnat/hook_toggle" ] && echo "0" > "/sys/kernel/debug/hnat/hook_toggle"
+		lsmod | grep -q "mtkhnat" && rmmod mtkhnat 2>"/dev/null"
+	}
+}
+
 start(){
 	inital_conf
 
@@ -73,7 +110,11 @@ start(){
 	[ "${sw_flow}" -ne "1" ] && [ "${sfe_flow}" -eq "1" ] && {
 		load_sfe
 	}
-	
+
+	[ "${hnat_flow}" -eq "1" ] && {
+		load_hnat
+	}
+
 	[ "${hw_flow}" -eq "1" ] && [ "${hw_wed}" -eq "1" ] && {
 		load_wed
 	}
@@ -106,6 +147,8 @@ stop(){
 		unload_wed
 	}
 
+	unload_hnat
+
 	unload_sfe
 
 	if [ "${restart_utils}" = "true" ]; then
@@ -127,6 +170,7 @@ restart(){
 }
 
 check_status(){
+	detect_fw
 	case "$1" in
 	"fastpath")
 		if [ "$(cat "/sys/module/nft_flow_offload/refcnt" 2>"/dev/null" || echo -1)" -gt "0" ]; then
@@ -154,7 +198,11 @@ check_status(){
 		fi
 		;;
 	"fullconenat")
-    	if [ "$(cat "/sys/module/nft_fullcone/refcnt" 2>"/dev/null" || echo -1)" -gt "0" ]; then
+    	if [ "$FW_FLAVOR" = "fw3" ]; then
+			# firewall3 fullcone generates iptables FULLCONENAT rules
+			iptables-save 2>"/dev/null" | grep -q "FULLCONENAT" && \
+				exit_code=0 || exit_code=1
+		elif [ "$(cat "/sys/module/nft_fullcone/refcnt" 2>"/dev/null" || echo -1)" -gt "0" ]; then
 			exit_code=0
 		else
 			exit_code=1
